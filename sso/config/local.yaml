@@ -1,0 +1,11 @@
+env: "local"
+storage_path: "./storage/sso.db"
+token_ttl: 1h
+grpc:
+  port: 44044
+  timeout: 10h
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic: "sso_events"
+  dial_address: "kafka:9092"

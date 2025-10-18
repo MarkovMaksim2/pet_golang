@@ -1,0 +1,35 @@
+{
+  "dashboard": {
+    "title": "User Service - Основная метрика",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Время отклика gRPC сервиса",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "userservice_grpc_request",
+            "legendFormat": "{{status}} - {{method}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

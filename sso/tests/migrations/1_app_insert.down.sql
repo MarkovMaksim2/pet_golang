@@ -1,0 +1,1 @@
+DELETE app WHERE name = 'test';

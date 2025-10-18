@@ -1,0 +1,1 @@
+INSERT INTO apps (name, secret) VALUES ('userservice', 'b7xd9s8f6g4h2j0');
