@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -50,7 +51,7 @@ func main() {
 	kafkaConsumer := setupKafkaConsumer(log, cfg)
 	defer func() {
 		if err := kafkaConsumer.Close(); err != nil {
-			log.Error("Kafka close error")
+			log.Error("Kafka close error", slog.String("err", err.Error()))
 			exitCode = 1
 		}
 	}()
@@ -69,7 +70,13 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := userEventGetter.GetEventStart(ctx); err != nil {
-			log.Error("event getter exit with error")
+			if errors.Is(err, context.Canceled) {
+				log.Info("event getter stopped")
+				return
+			}
+			log.Error("event getter exit with error", slog.String("error", err.Error()))
+			exitCode = 1
+			return
 		}
 	}()
 
@@ -98,6 +105,7 @@ func main() {
 			}
 		case stopSignal := <-stop:
 			log.Info("shutting down application", slog.String("signal", stopSignal.String()))
+			return
 		}
 	}
 }

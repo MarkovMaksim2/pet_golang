@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -35,7 +36,7 @@ func main() {
 	storage, err := sqlite.New(cfg.StoragePath)
 	if err != nil {
 		log.Error("failed to create storage", slog.String("error", err.Error()))
-		os.Exit(exitCode)
+		exitCode = 1
 		return
 	}
 	kafkaProducer, err := kafkaproducer.New(
@@ -45,7 +46,12 @@ func main() {
 		os.Exit(exitCode)
 		return
 	}
-	defer kafkaProducer.Close()
+	defer func() {
+		if err := kafkaProducer.Close(); err != nil {
+			log.Error("Kafka close error", slog.String("err", err.Error()))
+			exitCode = 1
+		}
+	}()
 
 	eventSender := eventsender.New(log, storage, kafkaProducer)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -59,7 +65,13 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := eventSender.StartProcessingEvents(ctx, 5*time.Second); err != nil {
-			log.Error("Event sender stopped")
+			if errors.Is(err, context.Canceled) {
+				log.Info("Event sender stopped")
+				return
+			}
+			log.Error("Event sender stopped with error", slog.String("error", err.Error()))
+			exitCode = 1
+			return
 		}
 	}()
 

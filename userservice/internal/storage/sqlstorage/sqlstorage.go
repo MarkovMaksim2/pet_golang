@@ -13,14 +13,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type Dialect int
-
-const (
-	Postgres Dialect = iota
-	MySQL
-	SQLite
-)
-
 type SQLStorage struct {
 	db *sql.DB
 	storage.Storage

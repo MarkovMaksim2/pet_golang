@@ -10,6 +10,11 @@ import (
 	"userservice/internal/storage"
 )
 
+const (
+	noName    = "no name"
+	noSurname = "no surname"
+)
+
 type UserPayload struct {
 	UserID int64  `json:"id"`
 	Email  string `json:"email"`
@@ -41,8 +46,8 @@ func (p *UserProcessor) ProcessEvent(ctx context.Context, payload []byte) error 
 
 	user := &models.User{
 		ID:      userPayload.UserID,
-		Name:    "no name",
-		Surname: "no surname",
+		Name:    noName,
+		Surname: noSurname,
 		Avatar:  []byte{},
 	}
 	_, err = p.storage.CreateUser(ctx, user)

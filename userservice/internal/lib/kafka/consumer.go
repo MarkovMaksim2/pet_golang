@@ -74,14 +74,6 @@ func (c *Consumer) ReadMessage(ctx context.Context) (kafka.Message, error) {
 
 	log.Info("message read from Kafka", slog.Int64("offset", msg.Offset))
 
-	/*
-		err = c.reader.CommitMessages(ctx, msg)
-		if err != nil {
-			log.Error("failed to commit message", slog.String("error", err.Error()))
-			return kafka.Message{}, fmt.Errorf("commit message: %w", err)
-		}
-	*/
-
 	return msg, nil
 }
 

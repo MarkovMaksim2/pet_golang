@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sso/internal/domain/models"
@@ -14,6 +15,11 @@ import (
 
 type Storage struct {
 	db *sql.DB
+}
+
+type eventPayload struct {
+	Id    int64  `json:"id"`
+	Email string `json:"email"`
 }
 
 func New(storagePath string) (*Storage, error) {
@@ -73,7 +79,14 @@ func (s *Storage) SaveUser(ctx context.Context, email string, passHash []byte) (
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
 
-	eventPayload := fmt.Sprintf(`{"id": %d, "email": "%s"}`, resID, email)
+	eventPayloadBytes, err := json.Marshal(eventPayload{
+		Id:    resID,
+		Email: email,
+	})
+	if err != nil {
+		return resID, fmt.Errorf("failed to marshal event: %w", err)
+	}
+	eventPayload := string(eventPayloadBytes)
 
 	if err := s.SaveEvent(ctx, tx, "UserCreated", eventPayload); err != nil {
 		return 0, fmt.Errorf("%s: save event: %w", op, err)
