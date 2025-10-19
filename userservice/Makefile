@@ -10,6 +10,11 @@ run: build
 
 .PHONY: migrate
 
+.PHONY: run_docker
+
+run_docker: build
+	./userservice --config=./config/docker.yaml
+
 migrate:
 	go run ./cmd/migrator \
 	 --storage-path=./storage/userservice.db \
@@ -23,4 +28,4 @@ test_migrate:
 	 --migrations-path=./tests/migrations \
 	 --migrations-table=migrations_test
 
-.DEFAULT_GOAL := run
+.DEFAULT_GOAL := run_docker

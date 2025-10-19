@@ -8,4 +8,7 @@ RUN apk add --no-cache make git build-base sqlite-dev
 
 RUN go mod download
 
-CMD ["make", "run"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]

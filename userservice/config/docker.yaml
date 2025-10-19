@@ -6,10 +6,10 @@ grpc:
   timeout: 10h
 kafka:
   brokers:
-    - "localhost:9092"
+    - "kafka:9092"
   topic: "sso_events"
   group_id: "user-service-group"
-  dial_addr: "localhost:9092"
+  dial_addr: "kafka:9092"
 metrics:
   port: 8082
-  host: localhost
+  host: 0.0.0.0

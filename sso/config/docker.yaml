@@ -6,6 +6,6 @@ grpc:
   timeout: 10h
 kafka:
   brokers:
-    - "localhost:9092"
+    - "kafka:9092"
   topic: "sso_events"
-  dial_address: "localhost:9092"
+  dial_address: "kafka:9092"

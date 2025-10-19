@@ -38,48 +38,51 @@ func (s *Sender) StartProcessingEvents(ctx context.Context, handlePeriod time.Du
 	log := s.log.With(slog.String("op", op))
 
 	ticker := time.NewTicker(handlePeriod)
+	defer ticker.Stop()
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				log.Info("stopping event processing")
-				ticker.Stop()
-				return
-			case <-ticker.C:
-			}
-			event, err := s.EventProcessor.GetNewEvent(ctx)
-			if err != nil {
-				if errors.Is(err, storage.ErrNoNewEvents) {
-					continue
-				}
-				log.Error("failed to get new event", slog.String("error", err.Error()))
-				continue
-			}
-
-			if event.ID == 0 {
-				log.Debug("no new events")
-				continue
-			}
-
-			sendErr := s.EventProducer.Send(ctx, []byte(event.Type), []byte(event.Payload))
-			if sendErr != nil {
-				log.Error("failed to send event to producer",
-					slog.Int64("event_id", event.ID),
-					slog.String("error", sendErr.Error()))
-				continue
-			}
-
-			if err := s.EventProcessor.MarkEventAsDone(ctx, event.ID); err != nil {
-				log.Error(
-					"failed to mark event as sent",
-					slog.Int64("event_id", event.ID),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("stopping event processing")
+			return ctx.Err()
+		case <-ticker.C:
+			s.processNewEvent(ctx)
 		}
-	}()
+	}
+}
 
-	return nil
+func (s *Sender) processNewEvent(ctx context.Context) {
+	const op = "eventsender.processNewEvent"
+
+	log := s.log.With(slog.String("op", op))
+	event, err := s.EventProcessor.GetNewEvent(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrNoNewEvents) {
+			return
+		}
+		log.Error("failed to get new event", slog.String("error", err.Error()))
+		return
+	}
+
+	if event.ID == 0 {
+		log.Debug("no new events")
+		return
+	}
+
+	sendErr := s.EventProducer.Send(ctx, []byte(event.Type), []byte(event.Payload))
+	if sendErr != nil {
+		log.Error("failed to send event to producer",
+			slog.Int64("event_id", event.ID),
+			slog.String("error", sendErr.Error()))
+		return
+	}
+
+	if err := s.EventProcessor.MarkEventAsDone(ctx, event.ID); err != nil {
+		log.Error(
+			"failed to mark event as sent",
+			slog.Int64("event_id", event.ID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
 }

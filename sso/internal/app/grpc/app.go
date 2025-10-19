@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"net"
 	authgrpc "sso/internal/grpc/auth"
+	"sso/internal/services/auth"
+	"sso/internal/storage/sqlite"
+	"time"
 
 	"google.golang.org/grpc"
 )
@@ -15,7 +18,19 @@ type App struct {
 	port       int
 }
 
-func New(log *slog.Logger, authService authgrpc.Auth, port int) *App {
+type AppConfig struct {
+	GrpcPort    int
+	StoragePath string
+	TokenTTL    time.Duration
+}
+
+func New(log *slog.Logger, appConfig AppConfig) (*App, error) {
+	storage, err := sqlite.New(appConfig.StoragePath)
+	if err != nil {
+		return &App{}, fmt.Errorf("create storage: %w", err)
+	}
+
+	authService := auth.New(log, storage, storage, storage, appConfig.TokenTTL)
 	gRPCServer := grpc.NewServer()
 
 	authgrpc.Register(gRPCServer, authService)
@@ -23,14 +38,8 @@ func New(log *slog.Logger, authService authgrpc.Auth, port int) *App {
 	return &App{
 		log:        log,
 		gRPCServer: gRPCServer,
-		port:       port,
-	}
-}
-
-func (a *App) MustRun() {
-	if err := a.Run(); err != nil {
-		panic(err)
-	}
+		port:       appConfig.GrpcPort,
+	}, nil
 }
 
 func (a *App) Run() error {

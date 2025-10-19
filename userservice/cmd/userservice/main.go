@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
-	"time"
-	"userservice/internal/app"
+	grpcapp "userservice/internal/app/grpc"
 	"userservice/internal/config"
 	kafkaconsumer "userservice/internal/lib/kafka"
 	"userservice/internal/lib/metrics"
@@ -25,40 +25,81 @@ const (
 func main() {
 	cfg := config.MustLoad()
 	log := setupLogger(cfg.Env)
+	exitCode := 0
+
+	defer func() {
+		os.Exit(exitCode)
+	}()
+
+	application, err := grpcapp.New(
+		log,
+		grpcapp.AppConfig{
+			GrpcPort:    cfg.GRPC.Port,
+			StoragePath: cfg.StoragePath,
+			Secret:      cfg.Secret,
+		},
+	)
+	if err != nil {
+		log.Error("failed to init app", slog.String("error", err.Error()))
+		exitCode = 1
+		return
+	}
+	defer application.Stop()
 
 	userProcessor := setupUserProcessor(log, cfg.StoragePath)
 	kafkaConsumer := setupKafkaConsumer(log, cfg)
-	defer kafkaConsumer.Close()
+	defer func() {
+		if err := kafkaConsumer.Close(); err != nil {
+			log.Error("Kafka close error")
+			exitCode = 1
+		}
+	}()
 
 	userEventGetter := eventgetter.New(log, kafkaConsumer, userProcessor)
-	userEventGetter.GetEventStart(context.Background(), 5*time.Second)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	go func() {
+		defer wg.Done()
+		if err := userEventGetter.GetEventStart(ctx); err != nil {
+			log.Error("event getter exit with error")
+		}
+	}()
+
 	go func() {
 		if err := metrics.Listen(cfg.Metrics.Host, cfg.Metrics.Port); err != nil {
 			log.Error("failed to start metrics server", slog.String("error", err.Error()))
-			os.Exit(1)
 		}
 	}()
 	log.Info("starting application")
 
-	application := app.New(
-		log,
-		cfg.GRPC.Port,
-		cfg.StoragePath,
-		cfg.Secret,
-	)
-
-	go application.GRPCApp.MustRun()
+	appErrChan := make(chan error, 1)
+	go func() {
+		appErrChan <- application.Run()
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	stopSignal := <-stop
-	log.Info("shutting down application", slog.String("signal", stopSignal.String()))
-
-	application.GRPCApp.Stop()
-	// kafkaconsumer.Close()
-
-	log.Info("application stopped")
+	for {
+		select {
+		case err := <-appErrChan:
+			if err != nil {
+				log.Error("app failed", slog.String("error", err.Error()))
+				exitCode = 1
+				return
+			}
+		case stopSignal := <-stop:
+			log.Info("shutting down application", slog.String("signal", stopSignal.String()))
+		}
+	}
 }
 
 func setupLogger(env string) *slog.Logger {

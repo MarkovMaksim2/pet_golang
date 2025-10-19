@@ -8,6 +8,7 @@ import (
 	"sso/internal/domain/models"
 	"sso/internal/storage"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/mattn/go-sqlite3"
 )
 
@@ -15,7 +16,6 @@ type Storage struct {
 	db *sql.DB
 }
 
-// New creates a new SQLite storage instance.
 func New(storagePath string) (*Storage, error) {
 	const op = "storage.sqlite.New"
 
@@ -45,13 +45,18 @@ func (s *Storage) SaveUser(ctx context.Context, email string, passHash []byte) (
 		}
 	}()
 
-	stmt, err := tx.Prepare("INSERT INTO users (email, pass_hash) VALUES (?, ?)")
+	query, args, err := sq.Insert("users").Columns("email", "pass_hash").Values(email, passHash).ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
 
-	res, err := stmt.ExecContext(ctx, email, passHash)
+	res, err := stmt.ExecContext(ctx, args...)
 	if err != nil {
 		var sqliteErr sqlite3.Error
 
@@ -70,23 +75,28 @@ func (s *Storage) SaveUser(ctx context.Context, email string, passHash []byte) (
 
 	eventPayload := fmt.Sprintf(`{"id": %d, "email": "%s"}`, resID, email)
 
-	if err := s.SaveEvent(tx, "UserCreated", eventPayload); err != nil {
+	if err := s.SaveEvent(ctx, tx, "UserCreated", eventPayload); err != nil {
 		return 0, fmt.Errorf("%s: save event: %w", op, err)
 	}
 
 	return resID, nil
 }
 
-func (s *Storage) SaveEvent(tx *sql.Tx, eventType, payload string) error {
+func (s *Storage) SaveEvent(ctx context.Context, tx *sql.Tx, eventType, payload string) error {
 	const op = "storage.sqlite.SaveEvent"
 
-	stmt, err := tx.Prepare("INSERT INTO messages (event_type, payload) VALUES (?, ?)")
+	query, args, err := sq.Insert("messages").Columns("event_type", "payload").Values(eventType, payload).ToSql()
+	if err != nil {
+		return fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	defer stmt.Close()
-	_, err = stmt.Exec(eventType, payload)
+	_, err = stmt.ExecContext(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -98,12 +108,17 @@ func (s *Storage) User(ctx context.Context, email string) (models.User, error) {
 	const op = "storage.sqlite.User"
 	var user models.User
 
-	stmt, err := s.db.Prepare("SELECT id, email, pass_hash FROM users WHERE email = ?")
+	query, args, err := sq.Select("id", "email", "pass_hash").From("users").Where(sq.Eq{"email": email}).ToSql()
+	if err != nil {
+		return user, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return user, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
-	row := stmt.QueryRowContext(ctx, email)
+	row := stmt.QueryRowContext(ctx, args...)
 	err = row.Scan(&user.ID, &user.Email, &user.PassHash)
 
 	if err != nil {
@@ -120,13 +135,18 @@ func (s *Storage) User(ctx context.Context, email string) (models.User, error) {
 func (s *Storage) IsAdmin(ctx context.Context, userID int64) (bool, error) {
 	const op = "storage.sqlite.IsAdmin"
 
-	stmt, err := s.db.Prepare("SELECT is_admin FROM admins WHERE user_id = ?")
+	query, args, err := sq.Select("is_admin").From("admins").Where(sq.Eq{"user_id": userID}).ToSql()
+	if err != nil {
+		return false, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
 
-	row := stmt.QueryRowContext(ctx, userID)
+	row := stmt.QueryRowContext(ctx, args...)
 	var isAdmin bool
 	err = row.Scan(&isAdmin)
 	if err != nil {
@@ -144,13 +164,18 @@ func (s *Storage) App(ctx context.Context, appID int64) (models.App, error) {
 	const op = "storage.sqlite.App"
 	var app models.App
 
-	stmt, err := s.db.Prepare("SELECT id, name, secret FROM apps WHERE id = ?")
+	query, args, err := sq.Select("id", "name", "secret").From("apps").Where(sq.Eq{"id": appID}).ToSql()
+	if err != nil {
+		return models.App{}, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return models.App{}, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
 
-	row := stmt.QueryRowContext(ctx, appID)
+	row := stmt.QueryRowContext(ctx, args...)
 	err = row.Scan(&app.ID, &app.Name, &app.Secret)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -165,10 +190,24 @@ func (s *Storage) App(ctx context.Context, appID int64) (models.App, error) {
 func (s *Storage) GetNewEvent(ctx context.Context) (models.Event, error) {
 	const op = "storage.sqlite.GetNewEvent"
 
-	row := s.db.QueryRow("SELECT id, event_type, payload FROM messages WHERE status = 'new' ORDER BY created_at LIMIT 1")
+	query, args, err := sq.Select("id", "event_type", "payload").
+		From("messages").
+		Where(sq.Eq{"status": "new"}).
+		OrderBy("created_at").
+		Limit(1).ToSql()
+	if err != nil {
+		return models.Event{}, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
+	if err != nil {
+		return models.Event{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	row := stmt.QueryRowContext(ctx, args...)
 
 	var event models.Event
-	err := row.Scan(&event.ID, &event.Type, &event.Payload)
+	err = row.Scan(&event.ID, &event.Type, &event.Payload)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.Event{}, fmt.Errorf("%s: %w", op, storage.ErrNoNewEvents)
@@ -182,13 +221,18 @@ func (s *Storage) GetNewEvent(ctx context.Context) (models.Event, error) {
 func (s *Storage) MarkEventAsDone(ctx context.Context, eventID int64) error {
 	const op = "storage.sqlite.MarkEventAsDone"
 
-	stmt, err := s.db.Prepare("UPDATE messages SET status = 'sent' WHERE id = ?")
+	query, args, err := sq.Update("messages").Set("status", "sent").Where(sq.Eq{"id": eventID}).ToSql()
+	if err != nil {
+		return fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	defer stmt.Close()
-	_, err = stmt.Exec(eventID)
+	_, err = stmt.ExecContext(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}

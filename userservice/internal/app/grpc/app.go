@@ -7,6 +7,8 @@ import (
 
 	userservicegrpc "userservice/internal/grpc/usersevice"
 	"userservice/internal/middleware"
+	"userservice/internal/services/userservice"
+	"userservice/internal/storage/sqlstorage"
 
 	"google.golang.org/grpc"
 )
@@ -17,24 +19,30 @@ type App struct {
 	port       int
 }
 
-func New(logger *slog.Logger, userService userservicegrpc.UserService, port int, secret string) *App {
-	jwtInterceptor := grpc.UnaryInterceptor(middleware.JWTAuthInterceptor(secret))
+type AppConfig struct {
+	GrpcPort    int
+	StoragePath string
+	Secret      string
+}
+
+func New(log *slog.Logger, appConfig AppConfig) (*App, error) {
+	storage, err := sqlstorage.New("sqlite3", appConfig.StoragePath)
+	if err != nil {
+		log.Error("failed to init storage", slog.String("error", err.Error()))
+		return &App{}, fmt.Errorf("storage creation: %w", err)
+	}
+
+	userService := userservice.New(log, storage, storage)
+	jwtInterceptor := grpc.UnaryInterceptor(middleware.JWTAuthInterceptor(appConfig.Secret))
 	gRPCServer := grpc.NewServer(jwtInterceptor)
 
 	userservicegrpc.Register(gRPCServer, userService)
 
 	return &App{
-		log:        logger,
+		log:        log,
 		gRPCServer: gRPCServer,
-		port:       port,
-	}
-}
-
-func (a *App) MustRun() {
-	if err := a.Run(); err != nil {
-		a.log.Error("failed to run gRPC server", slog.String("error", err.Error()))
-		panic(err)
-	}
+		port:       appConfig.GrpcPort,
+	}, nil
 }
 
 func (a *App) Run() error {

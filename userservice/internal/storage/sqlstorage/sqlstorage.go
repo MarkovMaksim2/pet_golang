@@ -9,6 +9,7 @@ import (
 	"userservice/internal/domain/models"
 	"userservice/internal/storage"
 
+	sq "github.com/Masterminds/squirrel"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -21,8 +22,7 @@ const (
 )
 
 type SQLStorage struct {
-	db      *sql.DB
-	dialect Dialect
+	db *sql.DB
 	storage.Storage
 }
 
@@ -38,44 +38,26 @@ func New(driver string, dsn string) (*SQLStorage, error) {
 		return nil, fmt.Errorf("%s: failed to ping database: %w", op, err)
 	}
 
-	dialect := detectDialect(driver)
 	log.Info("database connected", slog.String("dialect", driver))
 	return &SQLStorage{
-		db:      db,
-		dialect: dialect,
+		db: db,
 	}, nil
-}
-
-func detectDialect(driver string) Dialect {
-	switch driver {
-	case "postgres", "pgx":
-		return Postgres
-	case "mysql":
-		return MySQL
-	default:
-		return SQLite
-	}
-}
-
-func (s *SQLStorage) placeholder(n int) string {
-	switch s.dialect {
-	case Postgres:
-		return fmt.Sprintf("$%d", n)
-	default:
-		return "?"
-	}
 }
 
 func (s *SQLStorage) GetUserByID(ctx context.Context, userId int64) (*models.User, error) {
 	const op = "sqlstorage.GetUserById"
 
-	q := fmt.Sprintf(`SELECT id, name, surname, avatar FROM users WHERE id = %s`, s.placeholder(1))
-	stmt, err := s.db.Prepare(q)
+	query, args, err := sq.Select("id", "name", "surname", "avatar").From("users").Where(sq.Eq{"id": userId}).ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("%s: build query: %w", op, err)
+	}
+
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
-	row := stmt.QueryRowContext(ctx, userId)
+	row := stmt.QueryRowContext(ctx, args...)
 
 	var u models.User
 	if err := row.Scan(&u.ID, &u.Name, &u.Surname, &u.Avatar); err != nil {
@@ -89,14 +71,20 @@ func (s *SQLStorage) GetUserByID(ctx context.Context, userId int64) (*models.Use
 
 func (s *SQLStorage) UpdateUser(ctx context.Context, user *models.User) (*models.User, error) {
 	const op = "sqlstorage.UpdateUser"
-	q := fmt.Sprintf(`UPDATE users SET name = %s, surname = %s, avatar = %s WHERE id = %s RETURNING id, name, surname, avatar`,
-		s.placeholder(1), s.placeholder(2), s.placeholder(3), s.placeholder(4))
-	stmt, err := s.db.Prepare(q)
+	query, args, err := sq.Update("users").SetMap(sq.Eq{
+		"name":    user.Name,
+		"surname": user.Surname,
+		"avatar":  user.Avatar,
+	}).Where(sq.Eq{"id": user.ID}).Suffix("RETURNING id, name, surname, avatar").ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("%s: build query: %w", op, err)
+	}
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
-	row := stmt.QueryRowContext(ctx, user.Name, user.Surname, user.Avatar, user.ID)
+	row := stmt.QueryRowContext(ctx, args...)
 
 	var u models.User
 	if err := row.Scan(&u.ID, &u.Name, &u.Surname, &u.Avatar); err != nil {
@@ -110,18 +98,20 @@ func (s *SQLStorage) UpdateUser(ctx context.Context, user *models.User) (*models
 
 func (s *SQLStorage) CreateUser(ctx context.Context, user *models.User) (*models.User, error) {
 	const op = "sqlstorage.CreateUser"
-	q := fmt.Sprintf(`
-	INSERT INTO users (id, name, surname, avatar)
-	VALUES (%s, %s, %s, %s)
-	ON CONFLICT (id) DO NOTHING
-	RETURNING id, name, surname, avatar`,
-		s.placeholder(1), s.placeholder(2), s.placeholder(3), s.placeholder(4))
-	stmt, err := s.db.Prepare(q)
+
+	query, args, err := sq.Insert("users").Columns("id", "name", "surname", "avatar").
+		Values(user.ID, user.Name, user.Surname, user.Avatar).
+		Suffix("ON CONFLICT (id) DO NOTHING RETURNING id, name, surname, avatar").
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("%s: build query: %w", op, err)
+	}
+	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 	defer stmt.Close()
-	row := stmt.QueryRowContext(ctx, user.ID, user.Name, user.Surname, user.Avatar)
+	row := stmt.QueryRowContext(ctx, args...)
 	var u models.User
 	if err := row.Scan(&u.ID, &u.Name, &u.Surname, &u.Avatar); err != nil {
 		if err == sql.ErrNoRows {

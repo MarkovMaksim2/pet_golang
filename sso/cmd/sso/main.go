@@ -5,11 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sso/internal/app"
+	grpcapp "sso/internal/app/grpc"
 	"sso/internal/config"
 	kafkaproducer "sso/internal/lib/kafka"
 	eventsender "sso/internal/services/event-sender"
 	"sso/internal/storage/sqlite"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -23,44 +24,80 @@ const (
 func main() {
 	cfg := config.MustLoad()
 	log := setupLogger(cfg.Env)
+	exitCode := 0
+
+	defer func() {
+		os.Exit(exitCode)
+	}()
 
 	log.Info("starting application")
 
 	storage, err := sqlite.New(cfg.StoragePath)
 	if err != nil {
 		log.Error("failed to create storage", slog.String("error", err.Error()))
-		os.Exit(1)
+		os.Exit(exitCode)
+		return
 	}
-	kafkaproducer, err := kafkaproducer.New(
+	kafkaProducer, err := kafkaproducer.New(
 		log, cfg.Kafka.Brokers, cfg.Kafka.Topic, cfg.Kafka.DialAdress)
 	if err != nil {
 		log.Error("failed to create storage", slog.String("error", err.Error()))
-		os.Exit(1)
+		os.Exit(exitCode)
+		return
 	}
-	defer kafkaproducer.Close()
+	defer kafkaProducer.Close()
 
-	eventSender := eventsender.New(log, storage, kafkaproducer)
-	go eventSender.StartProcessingEvents(context.Background(), 5*time.Second)
+	eventSender := eventsender.New(log, storage, kafkaProducer)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 
-	application := app.New(
+	go func() {
+		defer wg.Done()
+		if err := eventSender.StartProcessingEvents(ctx, 5*time.Second); err != nil {
+			log.Error("Event sender stopped")
+		}
+	}()
+
+	application, err := grpcapp.New(
 		log,
-		cfg.GRPC.Port,
-		cfg.StoragePath,
-		cfg.TokenTTL,
+		grpcapp.AppConfig{
+			GrpcPort:    cfg.GRPC.Port,
+			StoragePath: cfg.StoragePath,
+			TokenTTL:    cfg.TokenTTL,
+		},
 	)
+	if err != nil {
+		log.Error("failed to init app", slog.String("error", err.Error()))
+		exitCode = 1
+		return
+	}
 
-	go application.GRPCApp.MustRun()
+	appErrChan := make(chan error, 1)
+	go func() {
+		appErrChan <- application.Run()
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	stopSignal := <-stop
-	log.Info("shutting down application", slog.String("signal", stopSignal.String()))
-
-	application.GRPCApp.Stop()
-
-	log.Info("application stopped")
-	// TODO: Implement SSO command functionality
+	for {
+		select {
+		case err := <-appErrChan:
+			if err != nil {
+				log.Error("app failed", slog.String("error", err.Error()))
+				exitCode = 1
+				return
+			}
+		case stopSignal := <-stop:
+			log.Info("shutting down application", slog.String("signal", stopSignal.String()))
+			return
+		}
+	}
 }
 
 func setupLogger(env string) *slog.Logger {

@@ -8,6 +8,11 @@ build:
 run: build
 	./sso --config=./config/local.yaml
 
+.PHONY: run_docker
+
+run_docker: build
+	./sso --config=./config/docker.yaml
+
 .PHONY: migrate
 
 migrate:
@@ -23,4 +28,4 @@ test_migrate:
 	 --migrations-path=./tests/migrations \
 	 --migrations-table=migrations_test
 
-.DEFAULT_GOAL := run
+.DEFAULT_GOAL := run_docker
